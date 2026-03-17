@@ -34,12 +34,13 @@ app = FastAPI(title="Ballet Motion Analyzer", version="0.1.0")
 # CORS: ローカル開発 + Vercel本番ドメイン
 _CORS_ORIGINS = os.environ.get(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://*.vercel.app",
+    "http://localhost:5173,http://localhost:3000",
 ).split(",")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _CORS_ORIGINS],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
