@@ -11,6 +11,7 @@ MediaPipe BlazePose ラッパー
 import cv2
 import numpy as np
 import mediapipe as mp
+import mediapipe.python.solutions as mp_solutions
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
@@ -20,9 +21,9 @@ from mediapipe.tasks import python as mp_tasks_python
 from mediapipe.tasks.python import vision as mp_vision
 
 
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+mp_pose = mp_solutions.pose
+mp_drawing = mp_solutions.drawing_utils
+mp_drawing_styles = mp_solutions.drawing_styles
 
 # PoseLandmarker モデルファイルのパス
 _MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
