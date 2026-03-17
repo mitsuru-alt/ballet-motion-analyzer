@@ -11,7 +11,6 @@ MediaPipe BlazePose ラッパー
 import cv2
 import numpy as np
 import mediapipe as mp
-import mediapipe.python.solutions as mp_solutions
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
@@ -20,10 +19,53 @@ import math
 from mediapipe.tasks import python as mp_tasks_python
 from mediapipe.tasks.python import vision as mp_vision
 
+# mediapipe.solutions はバージョン/環境によってインポート方法が異なる
+# 複数のフォールバックを試す
+mp_pose = None
+mp_drawing = None
+mp_drawing_styles = None
 
-mp_pose = mp_solutions.pose
-mp_drawing = mp_solutions.drawing_utils
-mp_drawing_styles = mp_solutions.drawing_styles
+def _init_solutions():
+    """遅延ロードで solutions API を初期化"""
+    global mp_pose, mp_drawing, mp_drawing_styles
+    if mp_pose is not None:
+        return
+
+    # 方法1: 標準パス
+    try:
+        mp_pose = mp.solutions.pose
+        mp_drawing = mp.solutions.drawing_utils
+        mp_drawing_styles = mp.solutions.drawing_styles
+        return
+    except AttributeError:
+        pass
+
+    # 方法2: 明示的 python.solutions パス
+    try:
+        import mediapipe.python.solutions as _sols
+        mp_pose = _sols.pose
+        mp_drawing = _sols.drawing_utils
+        mp_drawing_styles = _sols.drawing_styles
+        return
+    except (ImportError, AttributeError):
+        pass
+
+    # 方法3: 個別インポート
+    try:
+        import mediapipe.python.solutions.pose as _pose
+        import mediapipe.python.solutions.drawing_utils as _drawing
+        import mediapipe.python.solutions.drawing_styles as _dstyles
+        mp_pose = _pose
+        mp_drawing = _drawing
+        mp_drawing_styles = _dstyles
+        return
+    except (ImportError, AttributeError):
+        pass
+
+    raise ImportError(
+        "mediapipe solutions API could not be loaded. "
+        f"mediapipe version: {mp.__version__}"
+    )
 
 # PoseLandmarker モデルファイルのパス
 _MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
@@ -175,6 +217,7 @@ class PoseEstimator:
 
     def _process_video_file(self, video_path: str) -> list[FrameResult]:
         """動画ファイルパスから処理"""
+        _init_solutions()
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return []
@@ -254,6 +297,7 @@ class PoseEstimator:
             source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             frame_interval = max(1, int(source_fps / dense_fps))
 
+            _init_solutions()
             dense_frames = []
             frame_index = 0
 
@@ -339,6 +383,7 @@ class PoseEstimator:
         self, image: np.ndarray, frame_index: int, timestamp_ms: float
     ) -> FrameResult | None:
         """単一フレームの骨格検出"""
+        _init_solutions()
         with mp_pose.Pose(
             static_image_mode=True,
             model_complexity=self.model_complexity,
@@ -378,6 +423,7 @@ class PoseEstimator:
         Returns:
             骨格描画済み画像のJPEGバイト列
         """
+        _init_solutions()
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
