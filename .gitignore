@@ -1,0 +1,43 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+*.db
+
+# MediaPipe model files (large binary, downloaded at runtime)
+backend/models/
+*.task
+
+# === Node.js ===
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.production.local
+
+# === IDE / OS ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === Claude Code local config ===
+.claude/
+
+# === Logs ===
+*.log
+npm-debug.log*
