@@ -150,6 +150,37 @@ class FrameResult:
         }
 
 
+# フレームの最大長辺ピクセル数（メモリ節約のためリサイズ）
+_MAX_FRAME_DIM = int(os.environ.get("MAX_FRAME_DIM", "640"))
+
+
+def _downscale_frame(frame: np.ndarray, max_dim: int = _MAX_FRAME_DIM) -> np.ndarray:
+    """長辺が max_dim を超える場合にアスペクト比を維持して縮小する"""
+    h, w = frame.shape[:2]
+    if max(h, w) <= max_dim:
+        return frame
+    scale = max_dim / max(h, w)
+    new_w, new_h = int(w * scale), int(h * scale)
+    return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def _save_video_tempfile(video_bytes: bytes, original_filename: str | None = None) -> str:
+    """動画バイトを一時ファイルに保存する。
+    iOS の .mov 等にも対応するため、元の拡張子を維持する。"""
+    import tempfile
+    suffix = ".mp4"
+    if original_filename:
+        ext = os.path.splitext(original_filename)[1].lower()
+        if ext in (".mov", ".mp4", ".avi", ".webm", ".m4v", ".3gp"):
+            suffix = ext
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        os.write(fd, video_bytes)
+    finally:
+        os.close(fd)
+    return tmp_path
+
+
 class PoseEstimator:
     """
     MediaPipe BlazePose による姿勢推定エンジン
@@ -188,9 +219,12 @@ class PoseEstimator:
         if image is None:
             return None
 
+        image = _downscale_frame(image)
         return self._detect_single(image, frame_index=0, timestamp_ms=0.0)
 
-    def process_video(self, video_bytes: bytes) -> list[FrameResult]:
+    def process_video(
+        self, video_bytes: bytes, original_filename: str | None = None
+    ) -> list[FrameResult]:
         """
         動画バイト列からフレームをサンプリングして骨格検出
 
@@ -198,18 +232,12 @@ class PoseEstimator:
 
         Args:
             video_bytes: 動画ファイルのバイト列
+            original_filename: 元のファイル名（拡張子判定用）
 
         Returns:
             検出成功フレームの FrameResult リスト
         """
-        import tempfile
-        import os
-
-        # OpenCV は直接バイト列から動画を読めないため一時ファイル経由
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
-
+        tmp_path = _save_video_tempfile(video_bytes, original_filename)
         try:
             return self._process_video_file(tmp_path)
         finally:
@@ -243,11 +271,12 @@ class PoseEstimator:
 
                 if frame_index % frame_interval == 0:
                     timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    small = _downscale_frame(frame)
+                    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
                     pose_results = pose.process(rgb)
 
                     if pose_results.pose_landmarks:
-                        h, w = frame.shape[:2]
+                        h, w = small.shape[:2]
                         results.append(FrameResult(
                             frame_index=frame_index,
                             timestamp_ms=timestamp_ms,
@@ -264,7 +293,10 @@ class PoseEstimator:
         cap.release()
         return results
 
-    def process_video_dense(self, video_bytes: bytes, dense_fps: int = 15) -> tuple[list[dict], float]:
+    def process_video_dense(
+        self, video_bytes: bytes, dense_fps: int = 15,
+        original_filename: str | None = None,
+    ) -> tuple[list[dict], float]:
         """
         回転検出用の高頻度サンプリング
 
@@ -282,12 +314,7 @@ class PoseEstimator:
                            "left_hip_x": float, "right_hip_x": float}]
             source_fps: 元動画のFPS
         """
-        import tempfile
-        import os
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
+        tmp_path = _save_video_tempfile(video_bytes, original_filename)
 
         try:
             cap = cv2.VideoCapture(tmp_path)
@@ -315,7 +342,8 @@ class PoseEstimator:
 
                     if frame_index % frame_interval == 0:
                         timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        small = _downscale_frame(frame)
+                        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
                         pose_results = pose.process(rgb)
 
                         if pose_results.pose_landmarks:
@@ -336,14 +364,12 @@ class PoseEstimator:
         finally:
             os.unlink(tmp_path)
 
-    def extract_frame_image(self, video_bytes: bytes, frame_index: int) -> bytes | None:
+    def extract_frame_image(
+        self, video_bytes: bytes, frame_index: int,
+        original_filename: str | None = None,
+    ) -> bytes | None:
         """動画から指定フレームをJPEG画像として抽出"""
-        import tempfile
-        import os
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
+        tmp_path = _save_video_tempfile(video_bytes, original_filename)
 
         try:
             cap = cv2.VideoCapture(tmp_path)
@@ -359,14 +385,12 @@ class PoseEstimator:
         finally:
             os.unlink(tmp_path)
 
-    def get_video_duration_ms(self, video_bytes: bytes) -> float:
+    def get_video_duration_ms(
+        self, video_bytes: bytes,
+        original_filename: str | None = None,
+    ) -> float:
         """動画の総時間をミリ秒で返す"""
-        import tempfile
-        import os
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
+        tmp_path = _save_video_tempfile(video_bytes, original_filename)
 
         try:
             cap = cv2.VideoCapture(tmp_path)
@@ -521,6 +545,7 @@ class PoseEstimator:
         if image is None:
             return None
 
+        image = _downscale_frame(image)
         h, w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -562,19 +587,16 @@ class PoseEstimator:
             image_height=h,
         )
 
-    def process_video_multi(self, video_bytes: bytes) -> list[MultiFrameResult]:
+    def process_video_multi(
+        self, video_bytes: bytes, original_filename: str | None = None
+    ) -> list[MultiFrameResult]:
         """動画から2人の骨格を継続トラッキングする。
 
         Returns:
             2人検出に成功したフレームの MultiFrameResult リスト
         """
-        import tempfile
-
         model_path = self._ensure_task_model()
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
+        tmp_path = _save_video_tempfile(video_bytes, original_filename)
 
         try:
             cap = cv2.VideoCapture(tmp_path)
@@ -605,14 +627,15 @@ class PoseEstimator:
 
                     if frame_index % frame_interval == 0:
                         timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        small = _downscale_frame(frame)
+                        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
                         mp_image = mp.Image(
                             image_format=mp.ImageFormat.SRGB, data=rgb
                         )
                         detection = landmarker.detect(mp_image)
 
                         if len(detection.pose_landmarks) >= 2:
-                            h, w = frame.shape[:2]
+                            h, w = small.shape[:2]
                             lms_lists = [list(lms) for lms in detection.pose_landmarks]
                             assigned = self._assign_person_ids(
                                 lms_lists, prev_hip_centers
