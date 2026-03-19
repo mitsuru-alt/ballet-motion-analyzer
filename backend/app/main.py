@@ -22,7 +22,7 @@ import io
 import os
 from typing import Any, Dict, List, Optional
 
-from .pose_estimator import PoseEstimator
+from .pose_estimator import PoseEstimator, _save_video_tempfile
 from .scoring_engine import (
     evaluate_frame, evaluate_video, evaluate_frame_pair, evaluate_video_pair,
     Advice, AnalysisResult,
@@ -220,77 +220,69 @@ async def analyze(file: UploadFile = File(...)):
                 analysis.landmarks_data = [frame_result.to_dict()]
 
         elif content_type in SUPPORTED_VIDEO_TYPES:
-            # まず2人検出を試行
-            multi_results = estimator.process_video_multi(
-                file_bytes, original_filename=original_filename
-            )
+            # 一時ファイルを1回だけ作り、全処理で使い回す（メモリ節約）
+            tmp_path = _save_video_tempfile(file_bytes, original_filename)
+            del file_bytes  # メモリ早期解放
 
-            if len(multi_results) >= 3:
-                # 2人検出できたフレームが十分ある → パ・ド・ドゥモード
-                video_duration_ms = estimator.get_video_duration_ms(
-                    file_bytes, original_filename=original_filename
-                )
-                analysis = evaluate_video_pair(
-                    multi_results,
-                    frame_indices=[mf.frame_index for mf in multi_results],
-                    frame_timestamps=[mf.timestamp_ms for mf in multi_results],
+            try:
+                # まず2人検出を試行
+                multi_results = estimator.process_video_multi_from_path(tmp_path)
+
+                if len(multi_results) >= 3:
+                    video_duration_ms = estimator.get_video_duration_ms_from_path(tmp_path)
+                    analysis = evaluate_video_pair(
+                        multi_results,
+                        frame_indices=[mf.frame_index for mf in multi_results],
+                        frame_timestamps=[mf.timestamp_ms for mf in multi_results],
+                        video_duration_ms=video_duration_ms,
+                    )
+                    analysis.landmarks_data = [mf.to_dict() for mf in multi_results]
+
+                    best_frame_image_b64 = None
+                    best_frame_jpg = estimator.extract_frame_image_from_path(
+                        tmp_path, analysis.best_frame_index,
+                    )
+                    if best_frame_jpg:
+                        best_frame_image_b64 = base64.b64encode(best_frame_jpg).decode("ascii")
+
+                    return _result_to_response(analysis, best_frame_image_b64=best_frame_image_b64)
+
+                # 2人検出できなかった → 単一人物パス
+                frame_results = estimator.process_video_from_path(tmp_path)
+                if not frame_results:
+                    raise HTTPException(
+                        422,
+                        "動画からポーズを検出できませんでした。全身が映る動画を使用してください。",
+                    )
+
+                all_landmarks = [fr.landmarks for fr in frame_results]
+                frame_indices = [fr.frame_index for fr in frame_results]
+                frame_timestamps = [fr.timestamp_ms for fr in frame_results]
+                video_duration_ms = estimator.get_video_duration_ms_from_path(tmp_path)
+
+                # 回転検出用の高頻度サンプリング
+                dense_frames, source_fps = estimator.process_video_dense_from_path(tmp_path)
+
+                analysis = evaluate_video(
+                    all_landmarks,
+                    frame_indices=frame_indices,
+                    frame_timestamps=frame_timestamps,
                     video_duration_ms=video_duration_ms,
+                    dense_frames=dense_frames,
+                    source_fps=source_fps,
                 )
-                analysis.landmarks_data = [mf.to_dict() for mf in multi_results]
+                analysis.landmarks_data = [fr.to_dict() for fr in frame_results]
 
-                # ベストフレーム画像
                 best_frame_image_b64 = None
-                best_frame_jpg = estimator.extract_frame_image(
-                    file_bytes, analysis.best_frame_index,
-                    original_filename=original_filename,
+                best_frame_jpg = estimator.extract_frame_image_from_path(
+                    tmp_path, analysis.best_frame_index,
                 )
                 if best_frame_jpg:
                     best_frame_image_b64 = base64.b64encode(best_frame_jpg).decode("ascii")
 
                 return _result_to_response(analysis, best_frame_image_b64=best_frame_image_b64)
-
-            # 2人検出できなかった → 既存の単一人物パス
-            frame_results = estimator.process_video(
-                file_bytes, original_filename=original_filename
-            )
-            if not frame_results:
-                raise HTTPException(
-                    422,
-                    "動画からポーズを検出できませんでした。全身が映る動画を使用してください。",
-                )
-
-            all_landmarks = [fr.landmarks for fr in frame_results]
-            frame_indices = [fr.frame_index for fr in frame_results]
-            frame_timestamps = [fr.timestamp_ms for fr in frame_results]
-            video_duration_ms = estimator.get_video_duration_ms(
-                file_bytes, original_filename=original_filename
-            )
-
-            # 回転検出用の高頻度サンプリング
-            dense_frames, source_fps = estimator.process_video_dense(
-                file_bytes, original_filename=original_filename
-            )
-
-            analysis = evaluate_video(
-                all_landmarks,
-                frame_indices=frame_indices,
-                frame_timestamps=frame_timestamps,
-                video_duration_ms=video_duration_ms,
-                dense_frames=dense_frames,
-                source_fps=source_fps,
-            )
-            analysis.landmarks_data = [fr.to_dict() for fr in frame_results]
-
-            # ベストフレーム画像をbase64で返す
-            best_frame_image_b64 = None
-            best_frame_jpg = estimator.extract_frame_image(
-                file_bytes, analysis.best_frame_index,
-                original_filename=original_filename,
-            )
-            if best_frame_jpg:
-                best_frame_image_b64 = base64.b64encode(best_frame_jpg).decode("ascii")
-
-            return _result_to_response(analysis, best_frame_image_b64=best_frame_image_b64)
+            finally:
+                os.unlink(tmp_path)
 
         else:
             raise HTTPException(400, f"Unsupported file type: {content_type}")

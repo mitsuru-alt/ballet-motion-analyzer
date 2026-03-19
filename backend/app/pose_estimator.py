@@ -19,16 +19,24 @@ from mediapipe.tasks import python as mp_tasks_python
 from mediapipe.tasks.python import vision as mp_vision
 
 # PoseLandmarker モデルファイルのパス
+# lite (~3MB) を使用。Render無料プラン (512MB RAM) でも安定動作。
+# 環境変数 POSE_MODEL で full/heavy に切替可能。
 _MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
-_TASK_MODEL_PATH = _MODEL_DIR / "pose_landmarker_heavy.task"
+_MODEL_VARIANT = os.environ.get("POSE_MODEL", "lite")  # lite / full / heavy
+_MODEL_FILENAMES = {
+    "lite": "pose_landmarker_lite.task",
+    "full": "pose_landmarker_full.task",
+    "heavy": "pose_landmarker_heavy.task",
+}
+_TASK_MODEL_PATH = _MODEL_DIR / _MODEL_FILENAMES.get(_MODEL_VARIANT, "pose_landmarker_lite.task")
 _TASK_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_heavy/float16/latest/"
-    "pose_landmarker_heavy.task"
+    f"pose_landmarker/pose_landmarker_{_MODEL_VARIANT}/float16/latest/"
+    f"pose_landmarker_{_MODEL_VARIANT}.task"
 )
 
 # フレームの最大長辺ピクセル数（メモリ節約のためリサイズ）
-_MAX_FRAME_DIM = int(os.environ.get("MAX_FRAME_DIM", "640"))
+_MAX_FRAME_DIM = int(os.environ.get("MAX_FRAME_DIM", "480"))
 
 
 def _downscale_frame(frame: np.ndarray, max_dim: int = _MAX_FRAME_DIM) -> np.ndarray:
@@ -327,40 +335,158 @@ class PoseEstimator:
     # ユーティリティ
     # ================================================================
 
-    def extract_frame_image(
-        self, video_bytes: bytes, frame_index: int,
-        original_filename: str | None = None,
+    def extract_frame_image_from_path(
+        self, video_path: str, frame_index: int,
     ) -> bytes | None:
-        """動画から指定フレームをJPEG画像として抽出"""
-        tmp_path = _save_video_tempfile(video_bytes, original_filename)
+        """動画ファイルパスから指定フレームをJPEG画像として抽出"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return None
+        _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return encoded.tobytes()
+
+    def get_video_duration_ms_from_path(self, video_path: str) -> float:
+        """動画ファイルパスから総時間をミリ秒で返す"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return 0.0
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cap.release()
+        return (total_frames / fps) * 1000
+
+    def process_video_from_path(self, video_path: str) -> list[FrameResult]:
+        """ファイルパスから動画処理（一時ファイル作成なし）"""
+        return self._process_video_file(video_path)
+
+    def process_video_dense_from_path(
+        self, video_path: str, dense_fps: int = 15,
+    ) -> tuple[list[dict], float]:
+        """ファイルパスから高頻度サンプリング（一時ファイル作成なし）"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return [], 30.0
+
+        source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_interval = max(1, int(source_fps / dense_fps))
+
+        dense_frames = []
+        frame_index = 0
+
+        with self._create_landmarker(num_poses=1) as landmarker:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                if frame_index % frame_interval == 0:
+                    timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    small = _downscale_frame(frame)
+                    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=rgb
+                    )
+                    detection = landmarker.detect(mp_image)
+
+                    if detection.pose_landmarks and len(detection.pose_landmarks) > 0:
+                        lms = detection.pose_landmarks[0]
+                        dense_frames.append({
+                            "frame_index": frame_index,
+                            "timestamp_ms": timestamp_ms,
+                            "left_shoulder_x": lms[11].x,
+                            "right_shoulder_x": lms[12].x,
+                            "left_hip_x": lms[23].x,
+                            "right_hip_x": lms[24].x,
+                        })
+
+                frame_index += 1
+
+        cap.release()
+        return dense_frames, source_fps
+
+    def process_video_multi_from_path(self, video_path: str) -> list[MultiFrameResult]:
+        """ファイルパスから2人トラッキング（一時ファイル作成なし）"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return []
+
+        source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_interval = max(1, int(source_fps / self.sample_fps))
+
+        results = []
+        frame_index = 0
+        prev_hip_centers = None
+
+        with self._create_landmarker(num_poses=2) as landmarker:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                if frame_index % frame_interval == 0:
+                    timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    small = _downscale_frame(frame)
+                    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=rgb
+                    )
+                    detection = landmarker.detect(mp_image)
+
+                    if len(detection.pose_landmarks) >= 2:
+                        h, w = small.shape[:2]
+                        lms_lists = [list(lms) for lms in detection.pose_landmarks]
+                        assigned = self._assign_person_ids(
+                            lms_lists, prev_hip_centers
+                        )
+                        world_lms = detection.pose_world_landmarks
+
+                        persons = []
+                        for pid, lms in assigned:
+                            wl = list(world_lms[pid]) if pid < len(world_lms) else []
+                            persons.append(PersonResult(
+                                person_id=pid,
+                                landmarks=lms,
+                                world_landmarks=wl,
+                            ))
+
+                        persons.sort(key=lambda p: p.person_id)
+                        results.append(MultiFrameResult(
+                            frame_index=frame_index,
+                            timestamp_ms=timestamp_ms,
+                            persons=persons,
+                            image_width=w,
+                            image_height=h,
+                        ))
+
+                        prev_hip_centers = []
+                        for p in persons:
+                            lh, rh = p.landmarks[23], p.landmarks[24]
+                            prev_hip_centers.append(
+                                ((lh.x + rh.x) / 2.0, (lh.y + rh.y) / 2.0)
+                            )
+
+                frame_index += 1
+
+        cap.release()
+        return results
+
+    # レガシー互換（bytes受け取り版）
+    def extract_frame_image(self, video_bytes: bytes, frame_index: int, **kw) -> bytes | None:
+        tmp_path = _save_video_tempfile(video_bytes, kw.get("original_filename"))
         try:
-            cap = cv2.VideoCapture(tmp_path)
-            if not cap.isOpened():
-                return None
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret:
-                return None
-            _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            return encoded.tobytes()
+            return self.extract_frame_image_from_path(tmp_path, frame_index)
         finally:
             os.unlink(tmp_path)
 
-    def get_video_duration_ms(
-        self, video_bytes: bytes,
-        original_filename: str | None = None,
-    ) -> float:
-        """動画の総時間をミリ秒で返す"""
-        tmp_path = _save_video_tempfile(video_bytes, original_filename)
+    def get_video_duration_ms(self, video_bytes: bytes, **kw) -> float:
+        tmp_path = _save_video_tempfile(video_bytes, kw.get("original_filename"))
         try:
-            cap = cv2.VideoCapture(tmp_path)
-            if not cap.isOpened():
-                return 0.0
-            total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            cap.release()
-            return (total_frames / fps) * 1000
+            return self.get_video_duration_ms_from_path(tmp_path)
         finally:
             os.unlink(tmp_path)
 
