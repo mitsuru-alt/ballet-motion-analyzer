@@ -23,27 +23,6 @@ export interface AdviceItem {
   priority: number;
 }
 
-export interface PersonLandmarks {
-  person_id: number;
-  landmarks: LandmarkPoint[];
-}
-
-export interface PairMetrics {
-  shared_com_displacement: number;
-  com_x: number;
-  com_y: number;
-  within_base: boolean;
-  trunk_verticality: number;
-  support_distance: number;
-  supported_person_id: number;
-}
-
-export interface PairData {
-  persons: PersonLandmarks[];
-  pair_metrics: PairMetrics;
-  pair_scores: Record<string, number>;
-}
-
 export interface AnalysisResponse {
   pose_type: string;
   overall_score: number;
@@ -66,7 +45,6 @@ export interface AnalysisResponse {
     rotation_duration_ms: number;
     peak_speed_rpm: number;
   };
-  pair_data?: PairData; // パ・ド・ドゥ解析データ（2人検出時のみ）
 }
 
 export function useAnalysis() {

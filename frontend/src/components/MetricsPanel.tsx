@@ -2,32 +2,16 @@ import { useState, useEffect } from "react";
 import type { AnalysisResponse } from "../hooks/useAnalysis";
 
 const METRIC_LABELS: Record<string, string> = {
-  leg_elevation: "脚の挙上角度",
-  back_line: "背中のライン",
-  knee_extension: "膝の伸展",
-  alignment: "アライメント",
   standing_knee: "軸脚の膝",
-  working_knee: "パッセ脚の膝",
-  toe_placement: "つま先の位置",
-  pelvic_tilt: "骨盤の水平性",
-  turnout: "アン・ドゥオール",
-  // ピルエット
   releve_height: "ルルヴェの高さ",
   vertical_axis: "体幹の垂直性",
   arm_position: "腕のポジション",
   pelvic_level: "骨盤の水平性",
   working_leg: "パッセ脚の位置",
-  // パ・ド・ドゥ
-  shared_com: "共有重心の安定性",
-  trunk_angle: "体幹の垂直性",
-  support_distance: "サポート距離",
 };
 
 const POSE_LABELS: Record<string, string> = {
-  arabesque: "アラベスク",
-  passe: "パッセ (ルティレ)",
   pirouette: "ピルエット",
-  pas_de_deux: "パ・ド・ドゥ",
   unknown: "未検出",
 };
 

@@ -4,7 +4,7 @@ import SkeletonOverlay from "./components/SkeletonOverlay";
 import MetricsPanel from "./components/MetricsPanel";
 import AdviceCard from "./components/AdviceCard";
 import RotationPanel from "./components/RotationPanel";
-import PddPanel from "./components/PddPanel";
+// PddPanel removed (pirouette-only app)
 import Dashboard from "./components/Dashboard";
 import { useAnalysis } from "./hooks/useAnalysis";
 import { useHistory } from "./hooks/useHistory";
@@ -32,7 +32,6 @@ export default function App() {
   const [headerBtnHover, setHeaderBtnHover] = useState(false);
   const [metricsHover, setMetricsHover] = useState(false);
   const [rotationHover, setRotationHover] = useState(false);
-  const [pddHover, setPddHover] = useState(false);
   const [adviceHover, setAdviceHover] = useState(false);
   const [view, setView] = useState<"analyze" | "dashboard">("analyze");
   const [dashBtnHover, setDashBtnHover] = useState(false);
@@ -51,7 +50,7 @@ export default function App() {
           metrics: result.metrics,
           advice: result.advice,
           rotation_data: result.rotation_data,
-          pair_data: result.pair_data,
+          // pair_data removed
         });
       }
     }
@@ -186,7 +185,7 @@ export default function App() {
               letterSpacing: "-0.02em",
             }}
           >
-            Ballet Motion Analyzer
+            Pirouette Analyzer
           </h1>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -341,7 +340,7 @@ export default function App() {
                 flexWrap: "wrap",
               }}
             >
-              {["アラベスク", "パッセ", "ピルエット", "パ・ド・ドゥ", "JPEG", "PNG", "MP4"].map((tag) => (
+              {["ピルエット専門", "回転カウント", "フォーム分析", "JPEG", "PNG", "MP4"].map((tag) => (
                 <span
                   key={tag}
                   style={{
@@ -577,7 +576,6 @@ export default function App() {
                       metrics={result.metrics}
                       poseType={result.pose_type}
                       width={700}
-                      pairData={result.pair_data}
                     />
                     {result.best_frame_timestamp_ms > 0 && (
                       <div
@@ -676,29 +674,7 @@ export default function App() {
                     <RotationPanel data={result.rotation_data} />
                   </div>
                 )}
-                {result.pair_data && (
-                  <div
-                    onMouseEnter={() => setPddHover(true)}
-                    onMouseLeave={() => setPddHover(false)}
-                    style={{
-                      background: "rgba(255,255,255,0.8)",
-                      borderRadius: 20,
-                      padding: 24,
-                      border: "1px solid rgba(226,232,240,0.6)",
-                      boxShadow: pddHover
-                        ? "0 12px 40px rgba(0,0,0,0.08)"
-                        : "0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06)",
-                      backdropFilter: "blur(12px)",
-                      transition:
-                        "box-shadow 0.3s ease, transform 0.3s ease",
-                      transform: pddHover ? "translateY(-2px)" : "none",
-                      animation:
-                        "fadeInScale 0.5s cubic-bezier(0.4,0,0.2,1) 0.1s both",
-                    }}
-                  >
-                    <PddPanel data={result.pair_data} />
-                  </div>
-                )}
+                {/* PdD panel removed - pirouette only */}
                 <div
                   onMouseEnter={() => setAdviceHover(true)}
                   onMouseLeave={() => setAdviceHover(false)}
