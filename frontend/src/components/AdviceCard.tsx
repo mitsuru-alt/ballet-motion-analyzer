@@ -111,6 +111,18 @@ export default function AdviceCard({ advice }: Props) {
         >
           改善アドバイス
         </h3>
+        <span
+          style={{
+            fontSize: 11,
+            color: "#6366f1",
+            fontWeight: 600,
+            background: "rgba(99,102,241,0.08)",
+            padding: "2px 8px",
+            borderRadius: 6,
+          }}
+        >
+          {advice.length}項目
+        </span>
       </div>
 
       {advice.map((item, i) => {

@@ -37,6 +37,14 @@ export default function App() {
   const [dashBtnHover, setDashBtnHover] = useState(false);
   const savedResultRef = useRef<string | null>(null);
 
+  // Responsive: detect narrow screens
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 900);
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 900);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   // 解析結果が出たら自動保存
   useEffect(() => {
     if (result && result.overall_score > 0) {
@@ -622,7 +630,7 @@ export default function App() {
                 />
               </div>
 
-              {/* Right: scores & advice */}
+              {/* Right: scores only */}
               <div
                 style={{
                   display: "flex",
@@ -651,6 +659,22 @@ export default function App() {
                 >
                   <MetricsPanel data={result} />
                 </div>
+              </div>
+            </div>
+
+            {/* Full-width: Rotation + Advice side by side */}
+            {(result.rotation_data || result.advice.length > 0) && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    result.rotation_data && result.advice.length > 0 && !isMobile
+                      ? "1fr 1fr"
+                      : "1fr",
+                  gap: 24,
+                  marginTop: 24,
+                }}
+              >
                 {result.rotation_data && (
                   <div
                     onMouseEnter={() => setRotationHover(true)}
@@ -674,30 +698,31 @@ export default function App() {
                     <RotationPanel data={result.rotation_data} />
                   </div>
                 )}
-                {/* PdD panel removed - pirouette only */}
-                <div
-                  onMouseEnter={() => setAdviceHover(true)}
-                  onMouseLeave={() => setAdviceHover(false)}
-                  style={{
-                    background: "rgba(255,255,255,0.8)",
-                    borderRadius: 20,
-                    padding: 24,
-                    border: "1px solid rgba(226,232,240,0.6)",
-                    boxShadow: adviceHover
-                      ? "0 12px 40px rgba(0,0,0,0.08)"
-                      : "0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06)",
-                    backdropFilter: "blur(12px)",
-                    transition:
-                      "box-shadow 0.3s ease, transform 0.3s ease",
-                    transform: adviceHover ? "translateY(-2px)" : "none",
-                    animation:
-                      "fadeInScale 0.5s cubic-bezier(0.4,0,0.2,1) 0.15s both",
-                  }}
-                >
-                  <AdviceCard advice={result.advice} />
-                </div>
+                {result.advice.length > 0 && (
+                  <div
+                    onMouseEnter={() => setAdviceHover(true)}
+                    onMouseLeave={() => setAdviceHover(false)}
+                    style={{
+                      background: "rgba(255,255,255,0.8)",
+                      borderRadius: 20,
+                      padding: 24,
+                      border: "1px solid rgba(226,232,240,0.6)",
+                      boxShadow: adviceHover
+                        ? "0 12px 40px rgba(0,0,0,0.08)"
+                        : "0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06)",
+                      backdropFilter: "blur(12px)",
+                      transition:
+                        "box-shadow 0.3s ease, transform 0.3s ease",
+                      transform: adviceHover ? "translateY(-2px)" : "none",
+                      animation:
+                        "fadeInScale 0.5s cubic-bezier(0.4,0,0.2,1) 0.15s both",
+                    }}
+                  >
+                    <AdviceCard advice={result.advice} />
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
         )}
       </main>
