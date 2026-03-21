@@ -216,18 +216,14 @@ class PoseEstimator:
             return SinglePassResult([], [], 30.0, 0.0)
 
         source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        video_duration_ms = (total_frames / source_fps) * 1000 if source_fps > 0 else 0.0
+        total_frames_raw = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # iOS .mov では FRAME_COUNT が 0 を返すことがある
+        has_total = total_frames_raw > 0
+        video_duration_ms = (total_frames_raw / source_fps) * 1000 if has_total and source_fps > 0 else 0.0
 
         # フレーム間引き間隔
         pose_interval = max(1, int(source_fps / self.sample_fps))     # ポーズ評価用
         dense_interval = max(1, int(source_fps / self.dense_fps))     # 回転検出用
-
-        # 処理が必要なフレーム番号を事前計算
-        need_frames: set[int] = set()
-        for i in range(total_frames):
-            if i % pose_interval == 0 or i % dense_interval == 0:
-                need_frames.add(i)
 
         frame_results = []
         dense_frames = []
@@ -236,19 +232,21 @@ class PoseEstimator:
         landmarker = self._get_landmarker()
         frame_index = 0
 
-        while frame_index < total_frames:
-            if frame_index not in need_frames:
+        while True:
+            is_pose_frame = (frame_index % pose_interval == 0)
+            is_dense_frame = (frame_index % dense_interval == 0)
+            need_this_frame = is_pose_frame or is_dense_frame
+
+            if not need_this_frame:
                 # 不要フレーム: grab()でスキップ（デコードしない = 高速）
-                cap.grab()
+                if not cap.grab():
+                    break
                 frame_index += 1
                 continue
 
             ret, frame = cap.read()
             if not ret:
                 break
-
-            is_pose_frame = (frame_index % pose_interval == 0)
-            is_dense_frame = (frame_index % dense_interval == 0)
 
             timestamp_ms = (frame_index / source_fps) * 1000
             small = _downscale_frame(frame)
@@ -271,8 +269,8 @@ class PoseEstimator:
                         image_width=w,
                         image_height=h,
                     ))
-                    # 元フレーム（フルサイズ）を保持
-                    frame_images[frame_index] = frame
+                    # 元フレーム（縮小済み）を保持（メモリ節約）
+                    frame_images[frame_index] = small.copy()
 
                 # 回転検出用: 座標のみ
                 if is_dense_frame:
@@ -288,6 +286,10 @@ class PoseEstimator:
             frame_index += 1
 
         cap.release()
+
+        # total_frames が取れなかった場合、実際に読めたフレーム数から計算
+        if not has_total and frame_index > 0:
+            video_duration_ms = (frame_index / source_fps) * 1000
 
         return SinglePassResult(
             frame_results=frame_results,
