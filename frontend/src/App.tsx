@@ -314,7 +314,7 @@ export default function App() {
                   lineHeight: 1.2,
                 }}
               >
-                バレエポーズを解析
+                回転を解析
               </h2>
               <p
                 style={{
