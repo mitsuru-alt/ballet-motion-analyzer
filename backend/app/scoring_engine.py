@@ -443,6 +443,154 @@ def generate_pirouette_advice(metrics: PirouetteMetrics) -> list[Advice]:
 
 
 # ============================================================
+# 回転数アドバイス生成
+# ============================================================
+
+# レベル別の理想回転数と到達目安
+ROTATION_LEVELS = [
+    {"min": 0,   "max": 0.9, "name": "プレパレーション", "next_target": 1,
+     "ideal": "まず1回転を安定させましょう"},
+    {"min": 1,   "max": 1.9, "name": "シングル", "next_target": 2,
+     "ideal": "シングルが安定したら、ダブルに挑戦する準備ができています"},
+    {"min": 2,   "max": 2.9, "name": "ダブル", "next_target": 3,
+     "ideal": "ダブルが安定したら、トリプルが射程圏内です"},
+    {"min": 3,   "max": 3.9, "name": "トリプル", "next_target": 4,
+     "ideal": "トリプル達成！4回転への道が開けています"},
+    {"min": 4,   "max": 4.9, "name": "クアドラプル", "next_target": 5,
+     "ideal": "4回転は上級者の証！5回転の世界へ挑みましょう"},
+    {"min": 5,   "max": 99,  "name": "5回転以上", "next_target": 6,
+     "ideal": "圧巻のテクニック！プロフェッショナルレベルです"},
+]
+
+
+def generate_rotation_advice(
+    rotation_data: dict,
+    form_scores: dict,
+) -> dict:
+    """回転数に基づく段階的アドバイスを生成"""
+    count = rotation_data.get("rotation_count", 0)
+    rpm = rotation_data.get("rpm", 0)
+
+    # 現在のレベルを判定
+    current_level = ROTATION_LEVELS[0]
+    for level in ROTATION_LEVELS:
+        if level["min"] <= count <= level["max"]:
+            current_level = level
+            break
+
+    # フォームスコアから弱点を特定
+    weakest_metric = ""
+    weakest_score = 100
+    if form_scores:
+        for k, v in form_scores.items():
+            if v < weakest_score:
+                weakest_score = v
+                weakest_metric = k
+
+    # 弱点に応じた改善ポイント
+    weakness_tips = {
+        "standing_knee": "軸足のひざをもっと伸ばすと、回転のロスが減ります",
+        "releve_height": "ルルヴェをもっと高くすると、床との摩擦が減って回転数が増えます",
+        "vertical_axis": "体の軸をまっすぐにすると、遠心力のブレが減って回転が続きます",
+        "arm_position": "アームスをコンパクトにまとめると、回転速度が上がります",
+        "pelvic_level": "骨盤を水平に保つと、軸がぶれず回転が安定します",
+        "working_leg": "パッセ脚をよりコンパクトに折りたたむと、回転慣性が小さくなり速く回れます",
+    }
+    weakness_tip = weakness_tips.get(weakest_metric, "")
+
+    # ── 回転数レベル別の具体的アドバイス ──
+    if count < 1:
+        tips = [
+            "【まず1回転を目指そう】",
+            "・プリエを深く取り、床をしっかり押して立ち上がる",
+            "・スポット（視線を一点に固定）を徹底する",
+            "・アン・ナヴァンの腕を素早くまとめる",
+            "・バーにつかまってパッセ・ルルヴェの軸を安定させる練習から",
+        ]
+    elif count < 2:
+        tips = [
+            "【ダブルへの道】",
+            "・プリエの勢い（フォルス）をもう少し強くする",
+            "・スポットを「パッ！パッ！」と2回切る意識",
+            "・腕を体に引き寄せるタイミングを早める",
+            "・パッセ脚を素早く引き上げて、回転の最初から軸を作る",
+            "",
+            "💡 シングルが10回中8回以上安定したら、ダブルに挑戦するタイミングです！",
+        ]
+    elif count < 3:
+        tips = [
+            "【トリプルへの道】",
+            "・プレパレーションの4番ポジションを深く・安定させる",
+            "・「引き上げ」を最大限に ── おへそから天井へ伸びるイメージ",
+            "・スポットのスピードを上げる（首の回転を速く）",
+            "・アームスを体の近くでコンパクトにまとめ続ける",
+            "・着地（フィニッシュ）を美しく ── コントロールの証",
+            "",
+            "💡 ダブルが安定したら、3回転目は「あと0.5秒引き上げを保つ」意識で！",
+        ]
+    elif count < 4:
+        tips = [
+            "【4回転（クアドラプル）への道】",
+            "・プリエからの力の伝達を最大効率に ── 無駄な力を抜く",
+            "・体幹の引き上げを極限まで ── 「コマの軸」をさらに細く",
+            "・パッセ脚のターンアウトを維持しつつコンパクトに",
+            "・スポットの切り替えをさらに鋭く",
+            "・ルルヴェの高さを保ち続ける持久力を鍛える",
+            "",
+            "💡 トリプル後に余裕があるなら、4回転目は自然に回れるはず。",
+            "  焦らず「軸の質」を高めることが近道です！",
+        ]
+    elif count < 5:
+        tips = [
+            "【5回転への道 ── 究極のテクニック】",
+            "・プレパレーションの「ため」を最大限に活用",
+            "・全身を一つの回転体として統合する意識",
+            "・呼吸を止めず、自然なリズムで回り続ける",
+            "・アームスの微調整で回転速度をコントロール",
+            "・フィニッシュまで体幹を緩めない精神力",
+            "",
+            "💡 4回転が安定したら、5回転目は「脱力」がカギ。",
+            "  力みを抜いて、体が自然に回る感覚を掴みましょう！",
+        ]
+    else:
+        tips = [
+            "【プロフェッショナルレベル！】",
+            "・回転の質（音楽性・表現力）を磨く段階です",
+            "・さまざまなピルエットの種類に挑戦（アティチュード、アラベスクなど）",
+            "・連続回転からの美しいフィニッシュを極める",
+            "・舞台での見せ方・空間の使い方を意識",
+        ]
+
+    # 弱点がある場合、最後に追加
+    if weakness_tip and weakest_score < 80:
+        tips.append("")
+        tips.append(f"⚠️ 回転数を増やすための最優先改善ポイント: {weakness_tip}")
+
+    # RPM（回転速度）に応じたコメント
+    rpm_comment = ""
+    if rpm > 0:
+        if rpm < 60:
+            rpm_comment = "回転速度がゆっくりめです。プリエの力をもっと使いましょう。"
+        elif rpm < 90:
+            rpm_comment = "良い回転速度です。この速度をキープできれば回転数が増えます。"
+        elif rpm < 120:
+            rpm_comment = "素晴らしい回転速度！スピードを活かして回転数を伸ばしましょう。"
+        else:
+            rpm_comment = "非常に速い回転です！スピードを制御しつつ軸を保つことが重要です。"
+
+    return {
+        "current_level": current_level["name"],
+        "next_target": current_level["next_target"],
+        "ideal_message": current_level["ideal"],
+        "tips": tips,
+        "weakness_tip": weakness_tip,
+        "weakest_metric": weakest_metric,
+        "weakest_score": round(weakest_score, 1),
+        "rpm_comment": rpm_comment,
+    }
+
+
+# ============================================================
 # 評価エントリポイント
 # ============================================================
 
@@ -528,6 +676,11 @@ def evaluate_video(
         rotation_data = compute_rotation_analysis(
             dense_frames, source_fps, video_duration_ms
         )
+        # 回転数に応じたアドバイスを追加
+        rotation_advice = generate_rotation_advice(
+            rotation_data, best_result.scores
+        )
+        rotation_data["rotation_advice"] = rotation_advice
         best_result.rotation_data = rotation_data
 
     return best_result
