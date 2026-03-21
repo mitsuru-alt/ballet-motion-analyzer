@@ -5,6 +5,12 @@ Pirouette Analyzer - MediaPipe PoseLandmarker Task API ラッパー
 
 ピルエット（回転）専門の軽量パイプライン。
 1回の動画スキャンで回転検出＋ポーズ評価を同時に行う。
+
+高速化:
+- Landmarkerをキャッシュ（毎回モデルロードしない）
+- 不要フレームはgrab()でスキップ（デコードしない）
+- dense_fps=10に削減（15→10）
+- ベストフレームをスキャン中に保存（動画再オープン不要）
 """
 
 import cv2
@@ -13,6 +19,7 @@ import mediapipe as mp
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import threading
 
 from mediapipe.tasks import python as mp_tasks_python
 from mediapipe.tasks.python import vision as mp_vision
@@ -90,11 +97,54 @@ class FrameResult:
 @dataclass
 class SinglePassResult:
     """1回の動画スキャンで得られる全データ"""
-    frame_results: list[FrameResult]       # 3fps ポーズ評価用
-    dense_frames: list[dict]               # 15fps 回転検出用（肩腰X座標のみ）
+    frame_results: list[FrameResult]       # ポーズ評価用
+    dense_frames: list[dict]               # 回転検出用（肩腰X座標のみ）
     source_fps: float
     video_duration_ms: float
     best_frame_jpg: bytes | None = None    # ベストフレーム画像
+    frame_images: dict[int, np.ndarray] | None = None  # フレーム番号→画像
+
+
+def _ensure_task_model() -> str:
+    """モデルファイルが無ければダウンロード"""
+    if _TASK_MODEL_PATH.exists():
+        return str(_TASK_MODEL_PATH)
+    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    import urllib.request
+    print(f"[PoseEstimator] Downloading model to {_TASK_MODEL_PATH}...")
+    urllib.request.urlretrieve(_TASK_MODEL_URL, str(_TASK_MODEL_PATH))
+    print("[PoseEstimator] Download complete.")
+    return str(_TASK_MODEL_PATH)
+
+
+# ============================================================
+# キャッシュ済みLandmarker（モデルを毎回ロードしない）
+# ============================================================
+_landmarker_cache: mp_vision.PoseLandmarker | None = None
+_landmarker_lock = threading.Lock()
+
+
+def _get_landmarker(
+    min_detection_confidence: float = 0.5,
+    min_tracking_confidence: float = 0.5,
+) -> mp_vision.PoseLandmarker:
+    """Landmarkerをキャッシュして返す（初回のみモデルロード）"""
+    global _landmarker_cache
+    if _landmarker_cache is not None:
+        return _landmarker_cache
+    with _landmarker_lock:
+        if _landmarker_cache is not None:
+            return _landmarker_cache
+        model_path = _ensure_task_model()
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=mp_tasks_python.BaseOptions(model_asset_path=model_path),
+            num_poses=1,
+            min_pose_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+        )
+        _landmarker_cache = mp_vision.PoseLandmarker.create_from_options(options)
+        print("[PoseEstimator] Landmarker cached.")
+        return _landmarker_cache
 
 
 class PoseEstimator:
@@ -104,33 +154,19 @@ class PoseEstimator:
         self,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
-        sample_fps: int = 3,
-        dense_fps: int = 15,
+        sample_fps: int = 2,       # 3→2に削減（十分な精度）
+        dense_fps: int = 10,       # 15→10に削減（回転検出には十分）
     ):
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
         self.sample_fps = sample_fps
         self.dense_fps = dense_fps
 
-    def _ensure_task_model(self) -> str:
-        if _TASK_MODEL_PATH.exists():
-            return str(_TASK_MODEL_PATH)
-        _MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        import urllib.request
-        print(f"[PoseEstimator] Downloading model to {_TASK_MODEL_PATH}...")
-        urllib.request.urlretrieve(_TASK_MODEL_URL, str(_TASK_MODEL_PATH))
-        print("[PoseEstimator] Download complete.")
-        return str(_TASK_MODEL_PATH)
-
-    def _create_landmarker(self) -> mp_vision.PoseLandmarker:
-        model_path = self._ensure_task_model()
-        options = mp_vision.PoseLandmarkerOptions(
-            base_options=mp_tasks_python.BaseOptions(model_asset_path=model_path),
-            num_poses=1,
-            min_pose_detection_confidence=self.min_detection_confidence,
-            min_tracking_confidence=self.min_tracking_confidence,
+    def _get_landmarker(self) -> mp_vision.PoseLandmarker:
+        return _get_landmarker(
+            self.min_detection_confidence,
+            self.min_tracking_confidence,
         )
-        return mp_vision.PoseLandmarker.create_from_options(options)
 
     # ================================================================
     # 画像処理
@@ -147,8 +183,8 @@ class PoseEstimator:
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        with self._create_landmarker() as landmarker:
-            result = landmarker.detect(mp_image)
+        landmarker = self._get_landmarker()
+        result = landmarker.detect(mp_image)
 
         if not result.pose_landmarks or len(result.pose_landmarks) == 0:
             return None
@@ -163,99 +199,128 @@ class PoseEstimator:
         )
 
     # ================================================================
-    # 動画処理（シングルパス）
+    # 動画処理（シングルパス・高速版）
     # ================================================================
 
     def process_video_single_pass(self, video_path: str) -> SinglePassResult:
         """
         1回の動画スキャンでポーズ評価用 + 回転検出用データを同時取得。
 
-        - 3fps: 全ランドマーク記録 → ポーズ評価
-        - 15fps: 肩腰X座標のみ記録 → 回転検出
-        - ベストフレーム画像も同時抽出
+        高速化:
+        - 不要フレームはgrab()でスキップ（デコードしない）
+        - Landmarkerはキャッシュ済み
+        - ポーズ用フレームの画像もメモリに保持（後で再オープン不要）
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return SinglePassResult([], [], 30.0, 0.0)
 
         source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         video_duration_ms = (total_frames / source_fps) * 1000 if source_fps > 0 else 0.0
 
         # フレーム間引き間隔
-        pose_interval = max(1, int(source_fps / self.sample_fps))     # 3fps用
-        dense_interval = max(1, int(source_fps / self.dense_fps))     # 15fps用
+        pose_interval = max(1, int(source_fps / self.sample_fps))     # ポーズ評価用
+        dense_interval = max(1, int(source_fps / self.dense_fps))     # 回転検出用
+
+        # 処理が必要なフレーム番号を事前計算
+        need_frames: set[int] = set()
+        for i in range(total_frames):
+            if i % pose_interval == 0 or i % dense_interval == 0:
+                need_frames.add(i)
 
         frame_results = []
         dense_frames = []
+        frame_images: dict[int, np.ndarray] = {}  # ベストフレーム抽出用
+
+        landmarker = self._get_landmarker()
         frame_index = 0
 
-        with self._create_landmarker() as landmarker:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                is_pose_frame = (frame_index % pose_interval == 0)
-                is_dense_frame = (frame_index % dense_interval == 0)
-
-                if is_pose_frame or is_dense_frame:
-                    timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-                    small = _downscale_frame(frame)
-                    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    detection = landmarker.detect(mp_image)
-
-                    if detection.pose_landmarks and len(detection.pose_landmarks) > 0:
-                        lms = detection.pose_landmarks[0]
-
-                        # 3fps: フルランドマーク記録
-                        if is_pose_frame:
-                            h, w = small.shape[:2]
-                            wl = list(detection.pose_world_landmarks[0]) if detection.pose_world_landmarks else []
-                            frame_results.append(FrameResult(
-                                frame_index=frame_index,
-                                timestamp_ms=timestamp_ms,
-                                landmarks=list(lms),
-                                world_landmarks=wl,
-                                image_width=w,
-                                image_height=h,
-                            ))
-
-                        # 15fps: 回転用座標のみ
-                        if is_dense_frame:
-                            dense_frames.append({
-                                "frame_index": frame_index,
-                                "timestamp_ms": timestamp_ms,
-                                "left_shoulder_x": lms[11].x,
-                                "right_shoulder_x": lms[12].x,
-                                "left_hip_x": lms[23].x,
-                                "right_hip_x": lms[24].x,
-                            })
-
+        while frame_index < total_frames:
+            if frame_index not in need_frames:
+                # 不要フレーム: grab()でスキップ（デコードしない = 高速）
+                cap.grab()
                 frame_index += 1
+                continue
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            is_pose_frame = (frame_index % pose_interval == 0)
+            is_dense_frame = (frame_index % dense_interval == 0)
+
+            timestamp_ms = (frame_index / source_fps) * 1000
+            small = _downscale_frame(frame)
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            detection = landmarker.detect(mp_image)
+
+            if detection.pose_landmarks and len(detection.pose_landmarks) > 0:
+                lms = detection.pose_landmarks[0]
+
+                # ポーズ評価用: フルランドマーク記録
+                if is_pose_frame:
+                    h, w = small.shape[:2]
+                    wl = list(detection.pose_world_landmarks[0]) if detection.pose_world_landmarks else []
+                    frame_results.append(FrameResult(
+                        frame_index=frame_index,
+                        timestamp_ms=timestamp_ms,
+                        landmarks=list(lms),
+                        world_landmarks=wl,
+                        image_width=w,
+                        image_height=h,
+                    ))
+                    # 元フレーム（フルサイズ）を保持
+                    frame_images[frame_index] = frame
+
+                # 回転検出用: 座標のみ
+                if is_dense_frame:
+                    dense_frames.append({
+                        "frame_index": frame_index,
+                        "timestamp_ms": timestamp_ms,
+                        "left_shoulder_x": lms[11].x,
+                        "right_shoulder_x": lms[12].x,
+                        "left_hip_x": lms[23].x,
+                        "right_hip_x": lms[24].x,
+                    })
+
+            frame_index += 1
 
         cap.release()
 
-        # ベストフレーム画像は後で抽出（evaluate後にbest_frame_indexが決まる）
         return SinglePassResult(
             frame_results=frame_results,
             dense_frames=dense_frames,
             source_fps=source_fps,
             video_duration_ms=video_duration_ms,
+            frame_images=frame_images,
         )
 
-    def extract_frame_image_from_path(
-        self, video_path: str, frame_index: int,
+    def extract_best_frame_image(
+        self,
+        scan_result: SinglePassResult,
+        best_frame_index: int,
+        video_path: str | None = None,
     ) -> bytes | None:
-        """動画から指定フレームをJPEG画像として抽出"""
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return None
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return None
-        _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return encoded.tobytes()
+        """ベストフレームをJPEG画像として取得（スキャン時の画像を使用）"""
+        # まずスキャン中に保持した画像を使う（高速）
+        if scan_result.frame_images and best_frame_index in scan_result.frame_images:
+            frame = scan_result.frame_images[best_frame_index]
+            _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return encoded.tobytes()
+
+        # フォールバック: 動画から直接読み込み
+        if video_path:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None
+            cap.set(cv2.CAP_PROP_POS_FRAMES, best_frame_index)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret:
+                return None
+            _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return encoded.tobytes()
+
+        return None

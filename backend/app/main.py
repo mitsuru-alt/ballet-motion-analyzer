@@ -141,13 +141,16 @@ async def analyze(file: UploadFile = File(...)):
                 )
                 analysis.landmarks_data = [fr.to_dict() for fr in scan.frame_results]
 
-                # ベストフレーム画像
+                # ベストフレーム画像（スキャン中に保持した画像を使用 = 動画再オープン不要）
                 best_frame_image_b64 = None
-                best_jpg = estimator.extract_frame_image_from_path(
-                    tmp_path, analysis.best_frame_index,
+                best_jpg = estimator.extract_best_frame_image(
+                    scan, analysis.best_frame_index, video_path=tmp_path,
                 )
                 if best_jpg:
                     best_frame_image_b64 = base64.b64encode(best_jpg).decode("ascii")
+
+                # スキャン結果の画像メモリを解放
+                scan.frame_images = None
 
                 return _result_to_response(analysis, best_frame_image_b64=best_frame_image_b64)
             finally:
