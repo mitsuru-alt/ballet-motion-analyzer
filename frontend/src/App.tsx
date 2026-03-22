@@ -562,7 +562,7 @@ export default function App() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 360px",
+                gridTemplateColumns: isMobile ? "1fr" : "1fr 360px",
                 gap: 24,
                 alignItems: "start",
               }}

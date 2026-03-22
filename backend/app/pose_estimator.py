@@ -39,8 +39,8 @@ _TASK_MODEL_URL = (
     f"pose_landmarker_{_MODEL_VARIANT}.task"
 )
 
-# フレームの最大長辺（メモリ節約）
-_MAX_FRAME_DIM = int(os.environ.get("MAX_FRAME_DIM", "480"))
+# フレームの最大長辺（メモリ節約＋高速化）
+_MAX_FRAME_DIM = int(os.environ.get("MAX_FRAME_DIM", "360"))
 
 
 def _downscale_frame(frame: np.ndarray, max_dim: int = _MAX_FRAME_DIM) -> np.ndarray:
@@ -154,8 +154,8 @@ class PoseEstimator:
         self,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
-        sample_fps: int = 2,       # 3→2に削減（十分な精度）
-        dense_fps: int = 10,       # 15→10に削減（回転検出には十分）
+        sample_fps: int = 2,       # ポーズ評価用（2fps = 0.5秒間隔）
+        dense_fps: int = 8,        # 回転検出用（10→8に削減、十分な精度）
     ):
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence

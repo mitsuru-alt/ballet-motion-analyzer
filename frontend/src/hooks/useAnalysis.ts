@@ -65,10 +65,18 @@ export function useAnalysis() {
     formData.append("file", file);
 
     try {
+      // Renderスリープからの復帰を事前に行う（バックグラウンド）
+      try {
+        await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(60000) });
+      } catch {
+        // ヘルスチェック失敗でも続行
+      }
+
       // XMLHttpRequest for upload progress tracking
       const data = await new Promise<AnalysisResponse>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", `${API_BASE}/api/analyze`);
+        xhr.timeout = 300000; // 5分タイムアウト
 
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
@@ -91,7 +99,8 @@ export function useAnalysis() {
             reject(new Error(`Error ${xhr.status}`));
           }
         };
-        xhr.onerror = () => reject(new Error("ネットワークエラー"));
+        xhr.onerror = () => reject(new Error("ネットワークエラー。サーバーが起動中の場合があります。少し待ってから再度お試しください。"));
+        xhr.ontimeout = () => reject(new Error("タイムアウト。動画が長すぎる可能性があります。短い動画でお試しください。"));
         xhr.send(formData);
       });
 
